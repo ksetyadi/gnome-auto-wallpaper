@@ -104,6 +104,19 @@ set_wallpaper() {
     gsettings set org.gnome.desktop.background picture-uri "file://$new_wallpaper"
     log_message "Wallpaper changed to $time_period: $(basename "$new_wallpaper")"
     log_message "Full path: $new_wallpaper"
+
+    # Get the current theme
+    current_theme=$(gsettings get org.gnome.desktop.interface color-scheme | tr -d "'")
+    log_message "Current theme: $current_theme"
+
+    # Change the theme to light or dark based on the time of day
+    if [[ ( $time_period == "Sunrise" || $time_period == "Noon" ) && $current_theme == "prefer-dark" ]]; then
+        gsettings set org.gnome.desktop.interface color-scheme 'default'
+        log_message "Theme changed to light"
+    elif [[ ( $time_period == "Sunset" || $time_period == "Night" ) && $current_theme == "default" ]]; then
+        gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 
+        log_message "Theme changed to dark"
+    fi
 }
 
 # Function to determine time period and set appropriate wallpaper
