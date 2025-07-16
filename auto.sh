@@ -95,6 +95,10 @@ set_wallpaper() {
         log_message "ERROR: Failed to get random wallpaper from $wallpaper_dir"
         return 1
     fi
+
+    # Getting the GUI environement, since cron doesn't have it
+    export DISPLAY=:0
+    export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
     
     # Set the wallpaper
     gsettings set org.gnome.desktop.background picture-uri "file://$new_wallpaper"
