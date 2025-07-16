@@ -102,6 +102,7 @@ set_wallpaper() {
     
     # Set the wallpaper
     gsettings set org.gnome.desktop.background picture-uri "file://$new_wallpaper"
+    gsettings set org.gnome.desktop.background picture-uri-dark "file://$new_wallpaper"
     log_message "Wallpaper changed to $time_period: $(basename "$new_wallpaper")"
     log_message "Full path: $new_wallpaper"
 
