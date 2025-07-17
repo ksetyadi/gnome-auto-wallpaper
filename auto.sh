@@ -111,12 +111,17 @@ set_wallpaper() {
     log_message "Current theme: $current_theme"
 
     # Change the theme to light or dark based on the time of day
+    # and also change the Do Not Disturb (DND) status based on the time of day
     if [[ ( $time_period == "Sunrise" || $time_period == "Noon" ) && $current_theme == "prefer-dark" ]]; then
         gsettings set org.gnome.desktop.interface color-scheme 'default'
         log_message "Theme changed to light"
+        gsettings set org.gnome.desktop.notifications show-banners true
+        log_message "DND disabled"
     elif [[ ( $time_period == "Sunset" || $time_period == "Night" ) && $current_theme == "default" ]]; then
         gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 
         log_message "Theme changed to dark"
+        gsettings set org.gnome.desktop.notifications show-banners false
+        log_message "DND enabled"
     fi
 }
 
