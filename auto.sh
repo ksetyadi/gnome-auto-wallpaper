@@ -3,15 +3,38 @@
 # AutoWallpaper Script
 # Automatically sets wallpaper based on the time of day
 
-# Configuration - Edit these paths to match your wallpaper directories
-WALLPAPER_BASE_DIR="$HOME/Pictures"
-SUNRISE_DIR="$WALLPAPER_BASE_DIR/0_sunrise"
-NOON_DIR="$WALLPAPER_BASE_DIR/1_noon"
-SUNSET_DIR="$WALLPAPER_BASE_DIR/2_sunset"
-NIGHT_DIR="$WALLPAPER_BASE_DIR/3_night"
-
 # Supported image extensions
 IMAGE_EXTENSIONS=("jpg" "jpeg" "png" "bmp" "gif" "tiff" "webp")
+
+# Read configuration from auto.conf
+CONFIG_FILE="$(dirname "$0")/auto.conf"
+
+SESSION_NAMES=()
+TIME_STARTS=()
+TIME_ENDS=()
+WALLPAPER_DIRS=()
+THEMES=()
+DND_STATUSES=()
+
+# Parse auto.conf
+parse_config() {
+    while read -r line; do
+        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+        session=$(echo "$line" | awk '{print $1}')
+        time_range=$(echo "$line" | awk '{print $2}')
+        dir=$(echo "$line" | awk '{print $3}')
+        theme=$(echo "$line" | awk '{print $4}')
+        dnd=$(echo "$line" | awk '{print $5}')
+        start_hour=$(echo "$time_range" | cut -d'-' -f1)
+        end_hour=$(echo "$time_range" | cut -d'-' -f2)
+        SESSION_NAMES+=("$session")
+        TIME_STARTS+=("$start_hour")
+        TIME_ENDS+=("$end_hour")
+        WALLPAPER_DIRS+=("$dir")
+        THEMES+=("$theme")
+        DND_STATUSES+=("$dnd")
+    done < "$CONFIG_FILE"
+}
 
 # Function to log messages
 log_message() {
@@ -70,6 +93,8 @@ is_wallpaper_from_directory() {
 set_wallpaper() {
     local wallpaper_dir="$1"
     local time_period="$2"
+    local theme="$3"
+    local dnd="$4"
     
     # Check if wallpaper directory exists
     if [[ ! -d "$wallpaper_dir" ]]; then
@@ -106,45 +131,66 @@ set_wallpaper() {
     log_message "Wallpaper changed to $time_period: $(basename "$new_wallpaper")"
     log_message "Full path: $new_wallpaper"
 
-    # Get the current theme
+    # Change the theme and DND status based on config
+
     current_theme=$(gsettings get org.gnome.desktop.interface color-scheme | tr -d "'")
     log_message "Current theme: $current_theme"
-
-    # Change the theme to light or dark based on the time of day
-    # and also change the Do Not Disturb (DND) status based on the time of day
-    if [[ ( $time_period == "Sunrise" || $time_period == "Noon" ) && $current_theme == "prefer-dark" ]]; then
+    
+    if [[ $theme == "light" && $current_theme == "prefer-dark" ]]; then
         gsettings set org.gnome.desktop.interface color-scheme 'default'
-        log_message "Theme changed to light"
-        gsettings set org.gnome.desktop.notifications show-banners true
-        log_message "DND disabled"
-    elif [[ ( $time_period == "Sunset" || $time_period == "Night" ) && $current_theme == "default" ]]; then
-        gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 
-        log_message "Theme changed to dark"
+        log_message "Theme set to light (from config)"
+    elif [[ $theme == "dark" && $current_theme == "default" ]]; then
+        gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
+        log_message "Theme set to dark (from config)"
+    fi
+    
+    show_banners=$(gsettings get org.gnome.desktop.notifications show-banners | tr -d "'")
+    log_message "Current Show Banners/Notifications status: $show_banners"
+
+    if [[ $dnd == "true" && $show_banners == "true" ]]; then
         gsettings set org.gnome.desktop.notifications show-banners false
-        log_message "DND enabled"
+        log_message "DND enabled (from config)"
+    elif [[ $dnd == "false" && $show_banners == "false" ]]; then
+        gsettings set org.gnome.desktop.notifications show-banners true
+        log_message "DND disabled (from config)"
     fi
 }
 
-# Function to determine time period and set appropriate wallpaper
+# Function to determine time period and set appropriate wallpaper (now uses config)
 set_wallpaper_by_time() {
     local hour=$(date +%H)
     local hour_int=$((10#$hour))  # Convert to base 10 to handle leading zeros
-    
     log_message "Current hour: $hour_int"
-    
-    # Determine time period and set wallpaper
-    if [[ $hour_int -ge 5 && $hour_int -lt 9 ]]; then
-        # Sunrise: 5-9
-        set_wallpaper "$SUNRISE_DIR" "Sunrise"
-    elif [[ $hour_int -ge 9 && $hour_int -lt 16 ]]; then
-        # Noon: 9-16
-        set_wallpaper "$NOON_DIR" "Noon"
-    elif [[ $hour_int -ge 16 && $hour_int -lt 19 ]]; then
-        # Sunset: 16-19
-        set_wallpaper "$SUNSET_DIR" "Sunset"
-    else
-        # Night: 19-5 (19-23 and 0-4)
-        set_wallpaper "$NIGHT_DIR" "Night"
+
+    local n_sessions=${#SESSION_NAMES[@]}
+    local found=0
+    for ((i=0; i<n_sessions; i++)); do
+        local start=${TIME_STARTS[$i]}
+        local end=${TIME_ENDS[$i]}
+        local session=${SESSION_NAMES[$i]}
+        local dir=${WALLPAPER_DIRS[$i]}
+        local theme=${THEMES[$i]}
+        local dnd=${DND_STATUSES[$i]}
+
+        # Handle overnight ranges (e.g., 22-5)
+        if (( start <= end )); then
+            # Normal range
+            if (( hour_int >= start && hour_int < end )); then
+                set_wallpaper "$dir" "$session" "$theme" "$dnd"
+                found=1
+                break
+            fi
+        else
+            # Overnight range
+            if (( hour_int >= start || hour_int < end )); then
+                set_wallpaper "$dir" "$session" "$theme" "$dnd"
+                found=1
+                break
+            fi
+        fi
+    done
+    if (( !found )); then
+        log_message "No matching session found for hour $hour_int."
     fi
 }
 
@@ -170,30 +216,30 @@ count_images_in_directory() {
 # Function to check if required directories and files exist
 check_setup() {
     log_message "Checking setup..."
+
+    parse_config
     
-    # Check if base wallpaper directory exists
-    if [[ ! -d "$WALLPAPER_BASE_DIR" ]]; then
-        log_message "ERROR: Base wallpaper directory not found: $WALLPAPER_BASE_DIR"
+    # Check if base wallpaper directory exists (from first entry)
+    if [[ ${#WALLPAPER_DIRS[@]} -eq 0 ]]; then
+        log_message "WALLPAPER_DIRS: ${WALLPAPER_DIRS[@]}"
+        log_message "ERROR: No wallpaper directories configured. Check your auto.conf."
         return 1
     fi
     
-    # Check each time period directory
-    local directories=("$SUNRISE_DIR:Sunrise" "$NOON_DIR:Noon" "$SUNSET_DIR:Sunset" "$NIGHT_DIR:Night")
     local missing_dirs=()
     local empty_dirs=()
     
-    for dir_info in "${directories[@]}"; do
-        local dir_path="${dir_info%:*}"
-        local dir_name="${dir_info#*:}"
-        
+    for i in "${!WALLPAPER_DIRS[@]}"; do
+        local dir_path="${WALLPAPER_DIRS[$i]}"
+        local session="${SESSION_NAMES[$i]}"
         if [[ ! -d "$dir_path" ]]; then
-            missing_dirs+=("$dir_name ($dir_path)")
+            missing_dirs+=("$session ($dir_path)")
         else
             local image_count=$(count_images_in_directory "$dir_path")
             if [[ $image_count -eq 0 ]]; then
-                empty_dirs+=("$dir_name ($dir_path)")
+                empty_dirs+=("$session ($dir_path)")
             else
-                log_message "✓ $dir_name directory: $image_count image(s) found"
+                log_message "✓ $session directory: $image_count image(s) found"
             fi
         fi
     done
@@ -238,19 +284,10 @@ show_help() {
     echo "  -f, --force    Force wallpaper change regardless of current setting"
     echo "  -l, --list     List all available wallpapers in each directory"
     echo ""
-    echo "Time Periods:"
-    echo "  Sunrise: 05:00 - 08:59"
-    echo "  Noon:    09:00 - 15:59"
-    echo "  Sunset:  16:00 - 18:59"
-    echo "  Night:   19:00 - 04:59"
-    echo ""
     echo "Configuration:"
-    echo "  Base directory: $WALLPAPER_BASE_DIR"
-    echo "  Directories needed:"
-    echo "    - $SUNRISE_DIR/"
-    echo "    - $NOON_DIR/"
-    echo "    - $SUNSET_DIR/"
-    echo "    - $NIGHT_DIR/"
+    echo "  All time periods, session names, and wallpaper directories are read from: $CONFIG_FILE"
+    echo "  Example line: SessionName StartHour-EndHour /path/to/wallpapers"
+    echo "  Example: Sunrise 5-8 /home/user/Pictures/sunrise"
     echo ""
     echo "Supported formats: ${IMAGE_EXTENSIONS[*]}"
 }
@@ -265,30 +302,41 @@ show_status() {
     echo "  Time: $(date '+%H:%M')"
     echo "  Hour: $hour_int"
     
-    # Determine current time period
+    # Determine current time period/session
+    local n_sessions=${#SESSION_NAMES[@]}
+    local found=0
     local expected_dir=""
-    if [[ $hour_int -ge 5 && $hour_int -lt 9 ]]; then
-        echo "  Period: Sunrise (05:00 - 08:59)"
-        expected_dir="$SUNRISE_DIR"
-    elif [[ $hour_int -ge 9 && $hour_int -lt 16 ]]; then
-        echo "  Period: Noon (09:00 - 15:59)"
-        expected_dir="$NOON_DIR"
-    elif [[ $hour_int -ge 16 && $hour_int -lt 19 ]]; then
-        echo "  Period: Sunset (16:00 - 18:59)"
-        expected_dir="$SUNSET_DIR"
+    local session_label=""
+    for ((i=0; i<n_sessions; i++)); do
+        local start=${TIME_STARTS[$i]}
+        local end=${TIME_ENDS[$i]}
+        if (( start <= end )); then
+            if (( hour_int >= start && hour_int < end )); then
+                session_label="${SESSION_NAMES[$i]}"
+                expected_dir="${WALLPAPER_DIRS[$i]}"
+                found=1
+                break
+            fi
+        else
+            if (( hour_int >= start || hour_int < end )); then
+                session_label="${SESSION_NAMES[$i]}"
+                expected_dir="${WALLPAPER_DIRS[$i]}"
+                found=1
+                break
+            fi
+        fi
+    done
+    if (( found )); then
+        echo "  Period: $session_label ($expected_dir)"
     else
-        echo "  Period: Night (19:00 - 04:59)"
-        expected_dir="$NIGHT_DIR"
+        echo "  Period: Unknown"
     fi
-    
     echo "  Current wallpaper: $current_wallpaper"
-    
-    # Check if current wallpaper matches expected time period
-    if is_wallpaper_from_directory "$current_wallpaper" "$expected_dir"; then
+    if [[ -n "$expected_dir" ]] && is_wallpaper_from_directory "$current_wallpaper" "$expected_dir"; then
         echo "  Status: ✓ Wallpaper matches current time period"
     else
         echo "  Status: ✗ Wallpaper does not match current time period"
-        echo "  Expected from: $expected_dir"
+        [[ -n "$expected_dir" ]] && echo "  Expected from: $expected_dir"
     fi
 }
 
@@ -296,14 +344,10 @@ show_status() {
 list_wallpapers() {
     echo "Available wallpapers:"
     echo ""
-    
-    local directories=("$SUNRISE_DIR:Sunrise" "$NOON_DIR:Noon" "$SUNSET_DIR:Sunset" "$NIGHT_DIR:Night")
-    
-    for dir_info in "${directories[@]}"; do
-        local dir_path="${dir_info%:*}"
-        local dir_name="${dir_info#*:}"
-        
-        echo "[$dir_name] $dir_path:"
+    for i in "${!WALLPAPER_DIRS[@]}"; do
+        local dir_path="${WALLPAPER_DIRS[$i]}"
+        local session="${SESSION_NAMES[$i]}"
+        echo "[$session] $dir_path:"
         if [[ -d "$dir_path" ]]; then
             local count=$(count_images_in_directory "$dir_path")
             if [[ $count -gt 0 ]]; then
@@ -315,7 +359,6 @@ list_wallpapers() {
                     fi
                     find_args+=(-iname "*.${ext}")
                 done
-                
                 find "$dir_path" -type f \( "${find_args[@]}" \) 2>/dev/null | while read -r file; do
                     echo "  - $(basename "$file")"
                 done
@@ -357,6 +400,7 @@ main() {
             ;;
         "")
             # Normal execution
+            parse_config
             set_wallpaper_by_time
             exit $?
             ;;
